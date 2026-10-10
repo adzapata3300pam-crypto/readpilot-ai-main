@@ -36,6 +36,17 @@ RUN composer install \
 COPY docker/apache-readpilot-security.conf /etc/apache2/conf-available/readpilot-security.conf
 RUN a2enconf readpilot-security
 
+# Production PHP settings. Without this the image runs on PHP's built-in
+# defaults, where display_errors is On and any warning is printed into the
+# response body - which corrupts every JSON response the API returns.
+#
+# PHP_INI_SCAN_DIR is set explicitly because the base image leaves it empty,
+# which disables scanning of conf.d entirely and would silently ignore the file
+# below.
+ENV PHP_INI_SCAN_DIR=/usr/local/etc/php/conf.d
+RUN mkdir -p /usr/local/etc/php/conf.d
+COPY docker/php-production.ini /usr/local/etc/php/conf.d/zz-readpilot-production.ini
+
 COPY docker/entrypoint.sh /usr/local/bin/readpilot-entrypoint
 RUN chmod +x /usr/local/bin/readpilot-entrypoint
 

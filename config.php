@@ -119,6 +119,25 @@ function readpilot_db_config(): array
  * message goes to the error log; the page itself only ever shows the SQLSTATE
  * and a short hint, so credentials cannot leak into a browser.
  */
+/**
+ * True when the caller is a JSON endpoint rather than a page.
+ *
+ * The API modules are fetched from JavaScript and always call response.json().
+ * Handing one of them an HTML error page produces "Unexpected token '<'" in the
+ * browser, which hides the real cause behind a parse error.
+ */
+function readpilot_wants_json(): bool
+{
+    $script = basename((string) ($_SERVER['SCRIPT_NAME'] ?? ''));
+    if (str_ends_with($script, '-api.php')) {
+        return true;
+    }
+
+    $accept = strtolower((string) ($_SERVER['HTTP_ACCEPT'] ?? ''));
+
+    return str_contains($accept, 'application/json');
+}
+
 function readpilot_render_db_failure(PDOException $exception): never
 {
     $state = (string) ($exception->errorInfo[0] ?? $exception->getCode());
@@ -148,6 +167,20 @@ function readpilot_render_db_failure(PDOException $exception): never
     if (PHP_SAPI === 'cli') {
         fwrite(STDERR, 'MySQL error ' . $driverCode . ' (' . $state . '): ' . $hints . PHP_EOL);
         exit(1);
+    }
+
+    // An API caller must receive JSON, otherwise the browser reports a parse
+    // error instead of the actual problem.
+    if (readpilot_wants_json()) {
+        header('Content-Type: application/json; charset=utf-8');
+        echo json_encode([
+            'ok' => false,
+            'error' => 'The database is not reachable.',
+            'mysqlError' => $driverCode ?: null,
+            'sqlstate' => $state,
+            'detail' => $hints,
+        ]);
+        exit;
     }
 
     $codeHtml = $driverCode > 0 ? htmlspecialchars((string) $driverCode, ENT_QUOTES, 'UTF-8') : '';

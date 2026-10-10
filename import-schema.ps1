@@ -79,26 +79,72 @@ $arguments = @(
 Write-Host ''
 Write-Host 'Importing...' -ForegroundColor Yellow
 
-& $mysql @arguments
+$output = & $mysql @arguments 2>&1
 $exitCode = $LASTEXITCODE
 
 $plain = $null
 
+# Interpret the driver's error code rather than guessing, because "access
+# denied" and "host does not exist" need completely different fixes.
+$errorText = ($output | ForEach-Object { "$_" }) -join "`n"
+$code = if ($errorText -match 'ERROR\s+(\d{4})') { $Matches[1] } else { '' }
+
+if ($exitCode -ne 0) {
+    $raw = ($output | ForEach-Object { "$_" } | Where-Object { $_ -notmatch 'Warning.*command line interface' }) -join "`n"
+    if ($raw.Trim()) { Write-Host $raw -ForegroundColor Red }
+    Write-Host ''
+}
+
 Write-Host ''
+switch ($code) {
+    '1045' {
+        Write-Host 'Rejected: wrong username or password.' -ForegroundColor Red
+        Write-Host '  Re-copy the user and password from the Aiven Connection tab.'
+    }
+    '1044' {
+        Write-Host 'Access denied on the database.' -ForegroundColor Red
+        Write-Host '  Use the admin account (avnadmin). Ordinary service users are'
+        Write-Host '  scoped to "defaultdb" and cannot run CREATE DATABASE.'
+    }
+    '1049' {
+        Write-Host 'The database name does not exist.' -ForegroundColor Red
+        Write-Host '  database.sql creates "readpilot" itself, so this usually means the'
+        Write-Host '  connection landed somewhere unexpected. Check the host and port.'
+    }
+    '2005' {
+        Write-Host 'Unknown MySQL server host (2005).' -ForegroundColor Red
+        Write-Host '  The hostname did not resolve. Two usual causes:' -ForegroundColor Yellow
+        Write-Host '   1. The hostname was mistyped. Copy-paste it from Aiven''s'
+        Write-Host '      Connection tab rather than retyping it.'
+        Write-Host '   2. Aiven powered the free service down while it sat idle.'
+        Write-Host '      Open the Aiven console and press Power on if it shows as off.'
+    }
+    '2002' {
+        Write-Host 'Connection refused (2002).' -ForegroundColor Red
+        Write-Host '  Wrong port, or the service is stopped. Aiven usually assigns a'
+        Write-Host '  random high port such as 23456 rather than 3306.'
+    }
+    '2003' {
+        Write-Host 'Host unreachable (2003).' -ForegroundColor Red
+        Write-Host '  The name resolved but nothing answered. Confirm the service is running.'
+    }
+    '1153' {
+        Write-Host 'Connection dropped (1153).' -ForegroundColor Red
+        Write-Host '  This is often a regional mismatch or an IP allowlist on the provider.'
+    }
+    default {
+        Write-Host "mysql exited with code $exitCode." -ForegroundColor Red
+    }
+}
+
 if ($exitCode -eq 0) {
     Write-Host 'Import finished.' -ForegroundColor Green
     Write-Host ''
     Write-Host '  Next:' -ForegroundColor Cyan
     Write-Host '   1. Set DB_HOST / DB_PORT / DB_NAME / DB_USER / DB_PASS / DB_SSLMODE in Render'
-    Write-Host "   2. Sign in as admin@readpilot.local / ReadPilot2026!`
-    (delete these demo accounts afterwards)"
+    Write-Host '   2. Sign in as admin@readpilot.local / ReadPilot2026! (delete the demo'
+    Write-Host '      accounts afterwards)'
     Write-Host '   3. Open /setup.php to confirm all 15 tables imported'
-} else {
-    Write-Host "mysql exited with code $exitCode." -ForegroundColor Red
-    Write-Host ''
-    Write-Host '  Access denied? Use an admin account such as avnadmin.' -ForegroundColor Yellow
-    Write-Host '  Aiven scopes ordinary service users to "defaultdb" only, which'
-    Write-Host '  cannot run CREATE DATABASE.'
 }
 
 exit $exitCode

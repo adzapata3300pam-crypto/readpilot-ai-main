@@ -121,14 +121,22 @@ try {
 
     # A previous run may have left tables behind that CREATE TABLE IF NOT EXISTS
     # will silently skip, which is how a half-built schema survives. -Fresh
-    # removes that hazard.
+    # removes that hazard, but only if the DROP actually succeeds - so the
+    # outcome is checked rather than discarded.
     if ($Fresh) {
         Write-Host ''
         Write-Host '  -Fresh : dropping the database first' -ForegroundColor Yellow
-        & $mysql @arguments -e "DROP DATABASE IF EXISTS ``$Database``;" 2>&1 | Out-Null
+        $dropOut = & $mysql @arguments -e "DROP DATABASE IF EXISTS ``$Database``;" 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            $dropText = ($dropOut | ForEach-Object { "$_" }) -join ' '
+            if ($dropText -match 'ERROR\s+(\d{4})') {
+                Write-Host "  DROP FAILED (MySQL $($Matches[1])). The stale schema will survive." -ForegroundColor Red
+                Write-Host '  Re-run with -Repair, which adds missing columns in place.' -ForegroundColor Yellow
+            }
+        }
     }
 
-    Write-Host 'Importing...' -ForegroundColor Yellow
+Write-Host 'Importing...' -ForegroundColor Yellow
 
     # Anything mysql writes to stderr arrives as a PowerShell error record. It
     # must not abort the script, or a harmless warning hides the real result
@@ -138,6 +146,50 @@ try {
     $output = & $mysql @arguments 2>&1
     $exitCode = $LASTEXITCODE
     $ErrorActionPreference = $previousPreference
+
+    # Reconcile columns only once the tables are known to exist.
+    if ($exitCode -eq 0) {
+        # CREATE TABLE IF NOT EXISTS never alters a table that already exists,
+        # so a run that aborted part way through leaves columns behind that
+        # later runs cannot add back. Every column the application reads or
+        # writes is therefore checked here. The existence check runs first, so
+        # the ADD COLUMN itself needs no IF NOT EXISTS - a keyword that MySQL
+        # servers older than 8.0.29 reject outright.
+        $expectedColumns = @(
+            @{ table = 'users';              column = 'profile_image';        definition = "VARCHAR(255) NOT NULL DEFAULT ''" },
+            @{ table = 'users';              column = 'bio';                  definition = "TEXT NOT NULL DEFAULT ('')" },
+            @{ table = 'users';              column = 'google_sub';           definition = 'VARCHAR(255) NULL' },
+            @{ table = 'quiz_attempts';      column = 'session_id';           definition = 'BIGINT UNSIGNED NULL' },
+            @{ table = 'session_recordings'; column = 'consent_confirmed_at'; definition = 'DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP' },
+            @{ table = 'access_requests';    column = 'id_document_path';     definition = 'VARCHAR(255) NULL' },
+            @{ table = 'access_requests';    column = 'google_sub';           definition = 'VARCHAR(255) NULL' },
+            @{ table = 'students';           column = 'notes';                definition = "TEXT NOT NULL DEFAULT ('')" }
+        )
+
+        $repaired = @()
+        foreach ($entry in $expectedColumns) {
+            $has = Invoke-Scalar ("SELECT COUNT(*) FROM information_schema.columns " +
+                "WHERE table_schema = '$Database' AND table_name = '$($entry.table)' " +
+                "AND column_name = '$($entry.column)';")
+
+            if ($has -eq '1') { continue }
+
+            Write-Host "  repairing: $($entry.table).$($entry.column)" -ForegroundColor Yellow
+            & $mysql @arguments -e ("ALTER TABLE ``$($entry.table)`` ADD COLUMN ``$($entry.column)`` $($entry.definition);") 2>&1 |
+                Where-Object { "$_" -notmatch 'Warning.*command line interface' } | Out-Null
+
+            if ($LASTEXITCODE -eq 0) {
+                $repaired += "$($entry.table).$($entry.column)"
+            } else {
+                Write-Host "  FAILED to add $($entry.table).$($entry.column)" -ForegroundColor Red
+            }
+        }
+
+        if ($repaired.Count -gt 0) {
+            Write-Host ''
+            Write-Host "  Repaired $($repaired.Count) missing column(s): $($repaired -join ', ')" -ForegroundColor Green
+        }
+    }
 } finally {
     $plain = $null
     $escapedPassword = $null

@@ -19,6 +19,15 @@ require_admin();
 $user = current_user();
 $checks = [];
 
+/**
+ * Which commit is actually running. Render injects these automatically, so the
+ * page can prove what is deployed rather than leaving it to be inferred from
+ * build-log layer digests, which identify image contents and not source.
+ */
+$deployedCommit = readpilot_env('RENDER_GIT_COMMIT') ?: '';
+$deployedBranch = readpilot_env('RENDER_GIT_BRANCH') ?: '';
+$serviceName = readpilot_env('RENDER_SERVICE') ?: '';
+
 function check(string $label, bool $ok, string $detail = ''): array
 {
     return ['label' => $label, 'ok' => $ok, 'detail' => $detail];
@@ -197,6 +206,28 @@ $optional[] = check(
       </tr>
     <?php endforeach; ?>
   </table>
+
+  <h2>Deployment</h2>
+  <table>
+    <tr>
+      <td style="width:34%"><span class="dot <?= $deployedCommit !== '' ? 'pass' : 'fail' ?>"></span>Commit deployed</td>
+      <td class="detail"><code><?= htmlspecialchars($deployedCommit !== '' ? substr($deployedCommit, 0, 12) : 'RENDER_GIT_COMMIT is not set', ENT_QUOTES, 'UTF-8') ?></code></td>
+    </tr>
+    <tr>
+      <td><span class="dot <?= $deployedBranch !== '' ? 'pass' : 'fail' ?>"></span>Branch</td>
+      <td class="detail"><code><?= htmlspecialchars($deployedBranch !== '' ? $deployedBranch : 'unknown', ENT_QUOTES, 'UTF-8') ?></code></td>
+    </tr>
+    <tr>
+      <td><span class="dot <?= $serviceName !== '' ? 'pass' : 'fail' ?>"></span>Service</td>
+      <td class="detail"><?= htmlspecialchars($serviceName !== '' ? $serviceName : 'unknown', ENT_QUOTES, 'UTF-8') ?></td>
+    </tr>
+  </table>
+  <div class="note" style="margin-top:14px">
+    Compare the commit above with <code>git rev-parse --short HEAD</code> on your
+    machine. If they differ, Render is running an older build - trigger
+    <b>Manual Deploy</b>. A <code>sha256:</code> value in the build log is a
+    Docker image layer, not a commit.
+  </div>
 
   <h2>Optional integrations</h2>
   <div class="note" style="margin-bottom:14px">

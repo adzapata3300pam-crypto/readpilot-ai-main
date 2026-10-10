@@ -12,14 +12,12 @@ CREATE TABLE IF NOT EXISTS users (
   grade_level VARCHAR(80) NULL,
   section_name VARCHAR(80) NULL,
   bio TEXT NOT NULL DEFAULT (''),
+  profile_image VARCHAR(255) NOT NULL DEFAULT '',
   status ENUM('active', 'inactive', 'pending') NOT NULL DEFAULT 'active',
   last_login DATETIME NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
-ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT NOT NULL DEFAULT ('');
-ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_image VARCHAR(255) NOT NULL DEFAULT '';
-ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub VARCHAR(255) NULL;
 
 INSERT IGNORE INTO users
   (full_name, email, password_hash, role, school, grade_level, section_name, status, last_login)
@@ -70,7 +68,6 @@ CREATE TABLE IF NOT EXISTS students (
   CONSTRAINT fk_student_section FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB;
 
-ALTER TABLE students MODIFY status ENUM('new', 'ontrack', 'support', 'inactive') NOT NULL DEFAULT 'new';
 
 INSERT IGNORE INTO students (teacher_id, section_id, name, color, book, wpm, accuracy, sessions_count, sessions_this_week, books_completed, status, last_active, notes)
 SELECT u.id, s.id, x.name, x.color, x.book, x.wpm, x.accuracy, x.sessions_count, x.sessions_this_week, x.books_completed, x.status, x.last_active, x.notes
@@ -126,7 +123,6 @@ CREATE TABLE IF NOT EXISTS session_recordings (
   CONSTRAINT fk_recording_session FOREIGN KEY (session_id) REFERENCES reading_sessions(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
-ALTER TABLE session_recordings ADD COLUMN IF NOT EXISTS consent_confirmed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP;
 
 INSERT INTO reading_sessions (teacher_id, student_id, book, wpm, accuracy, duration_seconds, tricky_words, created_at)
 SELECT teacher.id, student.id, seed.book, seed.wpm, seed.accuracy, 0, '', seed.created_at
@@ -157,6 +153,7 @@ CREATE TABLE IF NOT EXISTS quiz_attempts (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   teacher_id INT UNSIGNED NOT NULL,
   student_id INT UNSIGNED NOT NULL,
+  session_id BIGINT UNSIGNED NULL,
   title VARCHAR(190) NOT NULL,
   score SMALLINT UNSIGNED NOT NULL,
   total_questions SMALLINT UNSIGNED NOT NULL,
@@ -269,9 +266,6 @@ CREATE TABLE IF NOT EXISTS access_requests (
   CONSTRAINT fk_access_reviewer FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB;
 
-ALTER TABLE access_requests ADD COLUMN IF NOT EXISTS google_sub VARCHAR(255) NULL;
-ALTER TABLE access_requests ADD COLUMN IF NOT EXISTS password_hash VARCHAR(255) NOT NULL DEFAULT '';
-ALTER TABLE access_requests ADD COLUMN IF NOT EXISTS id_document_path VARCHAR(255) NULL;
 
 CREATE TABLE IF NOT EXISTS audit_logs (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -300,7 +294,6 @@ CREATE TABLE IF NOT EXISTS recommendations (
   CONSTRAINT fk_recommendation_student FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
-ALTER TABLE quiz_attempts ADD COLUMN IF NOT EXISTS session_id BIGINT UNSIGNED NULL AFTER student_id;
 
 CREATE TABLE IF NOT EXISTS session_ai_evaluations (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,

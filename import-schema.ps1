@@ -96,7 +96,22 @@ try {
 
     [System.IO.File]::WriteAllText($optionFile, $optionFileContent, (New-Object System.Text.UTF8Encoding $false))
 
+    # Report the server version first. Schema compatibility differs sharply
+    # across MySQL releases - notably ALTER TABLE ... ADD COLUMN IF NOT EXISTS,
+    # which only arrived in 8.0.29.
+    $previousVersion = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $versionOut = & $mysql @arguments -e 'SELECT VERSION();' 2>&1
+    $ErrorActionPreference = $previousVersion
+
+    $serverVersion = ''
+    foreach ($line in $versionOut) { if ("$line" -match '\d+\.\d+\.\d+') { $serverVersion = "$line".Trim() } }
+
     Write-Host ''
+    if ($serverVersion) {
+        Write-Host "  server : MySQL $serverVersion" -ForegroundColor DarkGray
+    }
+
     Write-Host 'Importing...' -ForegroundColor Yellow
 
     # Anything mysql writes to stderr arrives as a PowerShell error record. It

@@ -67,22 +67,51 @@ $plain = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
 # stdin is untouched, which is what lets -p prompt for the password.
 $forwardSlashed = $schema.Replace('\', '/')
 
+# Pass credentials through a throwaway option file rather than "-p<password>".
+# That keeps the password out of the process list, where Task Manager and ps
+# would otherwise expose it, and avoids mysql's "password on the command line"
+# warning - which PowerShell surfaces as a NativeCommandError and, under
+# $ErrorActionPreference = 'Stop', treats as fatal.
+$optionFile = Join-Path ([System.IO.Path]::GetTempPath()) ('readpilot-import-' + [guid]::NewGuid().ToString('N') + '.cnf')
+
+# Escape the password so a value containing # ; quotes or newlines cannot break
+# out of the option-file format.
+$escapedPassword = '"' + ($plain -replace '\\', '\\\\' -replace '"', '\"' -replace "`r`n", '\n' -replace "`n", '\n' -replace "`r", '\r') + '"'
+
 $arguments = @(
-    '-h', $Host_,
-    '-P', "$Port",
-    '-u', $User,
-    '-p$plain',
-    '--ssl-mode=REQUIRED',
+    "--defaults-extra-file=$optionFile",
     '-e', "source $forwardSlashed"
 )
 
-Write-Host ''
-Write-Host 'Importing...' -ForegroundColor Yellow
+$exitCode = 1
+try {
+    $optionFileContent = @(
+        '[client]'
+        "host=$Host_"
+        "port=$Port"
+        "user=$User"
+        "password=$escapedPassword"
+        'ssl-mode=REQUIRED'
+    ) -join "`n"
 
-$output = & $mysql @arguments 2>&1
-$exitCode = $LASTEXITCODE
+    [System.IO.File]::WriteAllText($optionFile, $optionFileContent, (New-Object System.Text.UTF8Encoding $false))
 
-$plain = $null
+    Write-Host ''
+    Write-Host 'Importing...' -ForegroundColor Yellow
+
+    # Anything mysql writes to stderr arrives as a PowerShell error record. It
+    # must not abort the script, or a harmless warning hides the real result
+    # and the exit code is never inspected.
+    $previousPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $output = & $mysql @arguments 2>&1
+    $exitCode = $LASTEXITCODE
+    $ErrorActionPreference = $previousPreference
+} finally {
+    $plain = $null
+    $escapedPassword = $null
+    if (Test-Path $optionFile) { Remove-Item $optionFile -Force -ErrorAction SilentlyContinue }
+}
 
 # Interpret the driver's error code rather than guessing, because "access
 # denied" and "host does not exist" need completely different fixes.

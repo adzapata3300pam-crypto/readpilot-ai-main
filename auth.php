@@ -164,6 +164,22 @@ try {
         );
     }
 
+    // Do not claim a connection failure for what might be a missing column or
+    // any other query error. Naming the real cause is the difference between a
+    // five minute fix and an afternoon.
+    $reason = $exception->getMessage();
+    error_log('Authentication action "' . $action . '" failed: ' . $reason);
+
+    if (preg_match('/Unknown column/i', $reason)) {
+        $message = 'The database schema does not match this version of the application. '
+            . 'Re-import database.sql (with -Fresh) and try again. Detail: ' . $reason;
+    } elseif (preg_match('/Base table or view not found|doesn\'t exist/i', $reason)) {
+        $message = 'The database is missing expected tables. Re-import database.sql. Detail: ' . $reason;
+    } else {
+        $message = 'The sign-in request could not be completed. Detail: ' . $reason;
+    }
+
     http_response_code(500);
-    exit('Database connection failed. Import database.sql and check config.php.');
+    header('Content-Type: text/plain; charset=utf-8');
+    exit($message);
 }

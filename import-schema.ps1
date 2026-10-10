@@ -20,7 +20,8 @@ param(
     [string]$Host_,
     [int]$Port = 0,
     [string]$User,
-    [string]$Database = 'readpilot'
+    [string]$Database = 'readpilot',
+    [switch]$Fresh
 )
 
 $ErrorActionPreference = 'Stop'
@@ -101,15 +102,30 @@ try {
     # which only arrived in 8.0.29.
     $previousVersion = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    $versionOut = & $mysql @arguments -e 'SELECT VERSION();' 2>&1
-    $ErrorActionPreference = $previousVersion
 
-    $serverVersion = ''
-    foreach ($line in $versionOut) { if ("$line" -match '\d+\.\d+\.\d+') { $serverVersion = "$line".Trim() } }
+    function Invoke-Scalar {
+        param([string]$Sql)
+        # --batch --skip-column-names makes mysql emit only the value, so the
+        # result can be read without having to guess which line is the data.
+        $out = & $mysql @arguments --batch --skip-column-names -e $Sql 2>&1
+        $last = ''
+        foreach ($line in $out) { $last = "$line".Trim() }
+        return $last
+    }
 
-    Write-Host ''
-    if ($serverVersion) {
+    $serverVersion = Invoke-Scalar 'SELECT VERSION();'
+    if ($serverVersion -match '\d+\.\d+\.\d+') {
+        Write-Host ''
         Write-Host "  server : MySQL $serverVersion" -ForegroundColor DarkGray
+    }
+
+    # A previous run may have left tables behind that CREATE TABLE IF NOT EXISTS
+    # will silently skip, which is how a half-built schema survives. -Fresh
+    # removes that hazard.
+    if ($Fresh) {
+        Write-Host ''
+        Write-Host '  -Fresh : dropping the database first' -ForegroundColor Yellow
+        & $mysql @arguments -e "DROP DATABASE IF EXISTS ``$Database``;" 2>&1 | Out-Null
     }
 
     Write-Host 'Importing...' -ForegroundColor Yellow
@@ -185,19 +201,21 @@ if ($exitCode -eq 0) {
     Write-Host 'Import finished.' -ForegroundColor Green
 
     # --- Verify rather than assume ------------------------------------------
-    $previousVerify = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    $verify = & $mysql @arguments -e "SELECT COUNT(*) AS t FROM information_schema.tables WHERE table_schema = '$Database';" 2>&1
-    $ErrorActionPreference = $previousVerify
-
+    # Count from information_schema rather than SHOW TABLES: it works no matter
+    # which schema the session happens to be pointed at.
+    $tableCountRaw = Invoke-Scalar "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$Database';"
     $tableCount = -1
-    foreach ($line in $verify) { if ("$line" -match '^\s*(\d+)\s*$') { $tableCount = [int]$Matches[1] } }
+    if ($tableCountRaw -match '^\d+$') { $tableCount = [int]$tableCountRaw }
 
     Write-Host ''
     if ($tableCount -ge 15) {
         Write-Host "  Verified: $tableCount tables present in '$Database'." -ForegroundColor Green
-    } else {
+    } elseif ($tableCount -ge 0) {
         Write-Host "  WARNING: found $tableCount tables in '$Database', expected 15." -ForegroundColor Yellow
+        Write-Host '  If earlier attempts failed part way through, tables already exist' -ForegroundColor Yellow
+        Write-Host '  and CREATE TABLE IF NOT EXISTS skipped them. Re-run with -Fresh.' -ForegroundColor Yellow
+    } else {
+        Write-Host "  Could not read the table count. Check the connection manually." -ForegroundColor Yellow
     }
 
     Write-Host ''

@@ -122,15 +122,21 @@ function readpilot_db_config(): array
 function readpilot_render_db_failure(PDOException $exception): never
 {
     $state = (string) ($exception->errorInfo[0] ?? $exception->getCode());
-    $detail = 'Cannot reach the ReadPilot database (SQLSTATE ' . htmlspecialchars($state, ENT_QUOTES, 'UTF-8') . ').';
+    $driverCode = (int) ($exception->errorInfo[1] ?? 0);
 
     $hints = match (true) {
-        $state === 'HY000' && (int) ($exception->errorInfo[1] ?? 0) === 2002 =>
+        $driverCode === 2002 =>
             'The host refused the connection. Check DB_HOST and DB_PORT, and confirm the database provider allows connections from Render\'s outbound IPs.',
-        $state === 'HY000' && (int) ($exception->errorInfo[1] ?? 0) === 1045 =>
+        $driverCode === 1045 =>
             'The username or password was rejected. Check DB_USER and DB_PASS.',
-        $state === 'HY000' && (int) ($exception->errorInfo[1] ?? 0) === 1049 =>
-            'That database name does not exist. Check DB_NAME, and make sure database.sql has been imported.',
+        $driverCode === 1049 =>
+            'The server accepted the credentials but has no database by that name. Import database.sql, or point DB_NAME at a database that already exists.',
+        $driverCode === 2003 =>
+            'The host could not be reached. Check DB_HOST and that the database provider allows public connections.',
+        $driverCode === 2005 =>
+            'The host was found but the connection was refused. Check DB_PORT.',
+        $driverCode === 1153 =>
+            'The connection was dropped while waiting. Usually a network or firewall rule between Render and the database.',
         default =>
             'Check the DB_* environment variables and confirm database.sql has been imported into the server.',
     };
@@ -140,11 +146,12 @@ function readpilot_render_db_failure(PDOException $exception): never
     http_response_code(503);
 
     if (PHP_SAPI === 'cli') {
-        fwrite(STDERR, $detail . ' ' . $hints . PHP_EOL);
+        fwrite(STDERR, 'MySQL error ' . $driverCode . ' (' . $state . '): ' . $hints . PHP_EOL);
         exit(1);
     }
 
-    $detailHtml = htmlspecialchars($detail, ENT_QUOTES, 'UTF-8');
+    $codeHtml = $driverCode > 0 ? htmlspecialchars((string) $driverCode, ENT_QUOTES, 'UTF-8') : '';
+    $stateHtml = htmlspecialchars($state, ENT_QUOTES, 'UTF-8');
     $hintHtml = htmlspecialchars($hints, ENT_QUOTES, 'UTF-8');
 
     echo <<<HTML
@@ -163,7 +170,7 @@ function readpilot_render_db_failure(PDOException $exception): never
   footer{margin-top:22px;font-size:13px;color:#6b7684}
 </style></head>
 <body><div class="card">
-  <span class="state">SQLSTATE {$detailHtml}</span>
+  <span class="state">MySQL error {$codeHtml} &middot; SQLSTATE {$stateHtml}</span>
   <h1>The database is not reachable</h1>
   <p>ReadPilot cannot start a session without its MySQL server.</p>
   <div class="hint">{$hintHtml}</div>

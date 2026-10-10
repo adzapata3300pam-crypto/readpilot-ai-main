@@ -310,8 +310,8 @@ if ($exitCode -eq 0) {
     Write-Host '  Next:' -ForegroundColor Cyan
     Write-Host '   1. Set DB_HOST / DB_PORT / DB_NAME / DB_USER / DB_PASS / DB_SSLMODE in Render'
     Write-Host '   2. Set DB_SSL_CA=/var/www/html/certs/ca.pem so the connection is encrypted'
-    Write-Host '   3. Sign in as admin@readpilot.local / ReadPilot2026! (delete the demo'
-    Write-Host '      accounts afterwards)'
+    Write-Host '   3. Sign in as admin@readpilot.local / Admin123! - change it, it is'
+    Write-Host '      published in the repo) or teacher@readpilot.local / Teacher123!'
     Write-Host '   4. Open /setup.php to confirm all 15 tables imported'
 }
 

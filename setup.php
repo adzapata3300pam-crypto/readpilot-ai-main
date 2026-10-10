@@ -253,9 +253,11 @@ $optional[] = check(
     as <code>certs/ca.pem</code> in the project, and set
     <code>DB_SSL_CA=/var/www/html/certs/ca.pem</code>. On Aiven the certificate
     is under <b>Connection information &rarr; CA certificate &rarr; Download</b>.</p>
-    <p>Every seed account in <code>database.sql</code> shares the password
-    <code>ReadPilot2026!</code>. Change or delete those accounts before the site
-    is reachable by anyone other than you.</p>
+    <p>Demo accounts seeded by <code>database.sql</code> use weak, published
+    passwords: <code>admin@readpilot.local</code> is <code>Admin123!</code> and
+    <code>teacher@readpilot.local</code> is <code>Teacher123!</code>. Change the
+    admin password from <b>Settings</b>, or delete these accounts from the admin
+    panel, before the site is reachable by anyone other than you.</p>
   </div>
 </div>
 </body>

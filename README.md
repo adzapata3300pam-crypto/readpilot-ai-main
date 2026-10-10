@@ -104,14 +104,27 @@ Required PHP extensions: `pdo_mysql`, `curl`, `fileinfo`, `mbstring`, `zip`,
 
 ### Demo accounts
 
-`database.sql` seeds accounts that all share the password `ReadPilot2026!`.
-**Change or delete these before exposing the site to a network.**
+`database.sql` seeds demo accounts. **These passwords are published in this
+repository, so treat them as compromised and change them immediately.**
 
-| Email | Role |
-|---|---|
-| `admin@readpilot.local` | admin |
-| `teacher@readpilot.local` | teacher (owns the seeded roster) |
-| `elena.hernandez@readpilot.app` | teacher |
+| Email | Password | Role |
+|---|---|---|
+| `admin@readpilot.local` | `Admin123!` | admin |
+| `teacher@readpilot.local` | `Teacher123!` | teacher (owns the seeded roster) |
+| `elena.hernandez@readpilot.app` | *(unknown)* | teacher |
+| `priya.nair@readpilot.app` | *(unknown)* | teacher |
+| `diego.fuentes@readpilot.app` | *(unknown)* | teacher |
+| `marco.villanueva@readpilot.app` | *(unknown)* | teacher (seeded `inactive`) |
+| `liza.cortez@readpilot.app` | *(unknown)* | teacher |
+| `noel.bautista@readpilot.app` | *(unknown)* | teacher |
+| `ana.cabrera@readpilot.app` | *(unknown)* | admin |
+
+The seven secondary accounts share one bcrypt hash whose plaintext is not
+recoverable and is not documented anywhere. Use the admin account above to reset
+their passwords, or re-run `database.sql` against a fresh database to drop them.
+
+Sign in with `admin@readpilot.local` / `Admin123!`, then change it from
+**Settings**.
 
 ---
 

@@ -30,6 +30,10 @@ function owned_student(PDO $pdo, int $teacherId, int $studentId): array
 }
 
 $teacherId = (int) $user['id'];
+// The GET block runs seventeen queries and previously sat outside any
+// try/catch, so a failure there escaped as an unhandled PDOException. The POST
+// actions below already have their own handler; this one covers every view.
+try {
 if ($_SERVER['REQUEST_METHOD'] === 'GET') {
     if (($_GET['view'] ?? '') === 'sessions') {
         $statement = $pdo->prepare(
@@ -243,6 +247,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         $row['log'] = $logStatement->fetchAll();
     }
     json_response(['sections' => $sections->fetchAll(), 'students' => $rows]);
+}
+} catch (Throwable $getFailure) {
+    error_log('ReadPilot GET view failed: ' . $getFailure->getMessage());
+    json_response([
+        'error' => 'Could not load this view: ' . $getFailure->getMessage(),
+        'detail' => $getFailure->getMessage(),
+    ], 500);
 }
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {

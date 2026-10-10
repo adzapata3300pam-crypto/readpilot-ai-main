@@ -138,8 +138,13 @@ function readpilot_emit_failure(string $kind, string $message, string $file = ''
         }
         echo json_encode([
             'ok' => false,
-            'error' => $kind . $where,
+            // The reason goes in 'error' as well as 'detail'. The browser UI
+            // renders the error field and ignores everything else, so a
+            // message parked only in 'detail' is a message never seen.
+            'error' => $kind . $where . ': ' . $message,
             'detail' => $message,
+            'file' => $file !== '' ? basename($file) : '',
+            'line' => $line,
             'hint' => 'Full detail is in the Render Logs tab. If this mentions a missing column, re-run the schema import.',
         ]);
         exit;

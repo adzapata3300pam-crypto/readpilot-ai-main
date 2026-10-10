@@ -1187,6 +1187,13 @@
         showToast('Confirm school or guardian permission before recording.');
         return;
       }
+      if (!window.isSecureContext) {
+        // navigator.mediaDevices is undefined outside a secure context, so the
+        // generic "browser can't record" message would blame the browser when
+        // the actual cause is plain http.
+        showToast('Recording needs an https:// address. Open the https:// version of this page.');
+        return;
+      }
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || typeof MediaRecorder === 'undefined'){
         showToast("This browser can't record audio here — try Chrome or Edge.");
         return;
@@ -1196,7 +1203,19 @@
           audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
         });
       } catch (err) {
-        showToast('Microphone access was blocked. Please allow it to record.');
+        // Each of these needs a different fix, and the name is the only thing
+        // that distinguishes them from the outside.
+        const reason = (err && err.name) || '';
+        if (reason === 'NotAllowedError' || reason === 'SecurityError') {
+          showToast('Microphone permission denied. Allow it from the padlock icon beside the address, then try again.');
+        } else if (reason === 'NotFoundError' || reason === 'OverconstrainedError') {
+          showToast('No microphone was found on this device.');
+        } else if (reason === 'NotReadableError') {
+          showToast('The microphone is busy in another app. Close it and try again.');
+        } else {
+          showToast('Microphone unavailable (' + (reason || 'unknown') + '). Check browser permissions.');
+        }
+        console.error('getUserMedia failed:', err);
         return;
       }
       recordedChunks = [];

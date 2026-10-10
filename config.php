@@ -193,13 +193,6 @@ function db(): PDO
     $dsn = 'mysql:host=' . $config['host'] . ';port=' . $config['port']
         . ';dbname=' . $config['name'] . ';charset=utf8mb4';
 
-    // Managed MySQL (Aiven, PlanetScale, TiDB, Render) exposes TLS and usually
-    // expects certificate verification rather than a trusted local CA store.
-    $sslMode = strtolower(readpilot_setting_any('DB_SSLMODE', 'DB_SSL'));
-    if ($sslMode !== '' && $sslMode !== 'disable' && $sslMode !== 'false' && $sslMode !== '0') {
-        $dsn .= ';sslmode=' . $sslMode;
-    }
-
     $options = [
         PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
         PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
@@ -207,9 +200,40 @@ function db(): PDO
         PDO::ATTR_TIMEOUT => 10,
     ];
 
-    $caBundle = readpilot_setting('DB_SSL_CA');
-    if ($caBundle !== '' && is_file($caBundle)) {
-        $options[PDO::MYSQL_ATTR_SSL_CA] = $caBundle;
+    // ------------------------------------------------------------------
+    // TLS
+    //
+    // PDO's MySQL DSN has no "sslmode" keyword - the documented list is
+    // host, port, dbname, user, password and unix_socket only, so appending
+    // one is silently discarded and the connection goes out in clear text.
+    // TLS is enabled instead through the MYSQL_ATTR_SSL_* driver options,
+    // which map onto mysql_ssl_set().
+    // ------------------------------------------------------------------
+    $sslMode = strtolower(readpilot_setting_any('DB_SSLMODE', 'DB_SSL'));
+    $sslDisabled = in_array($sslMode, ['', 'disable', 'disabled', 'false', 'off', '0'], true);
+    $caPath = readpilot_setting('DB_SSL_CA');
+
+    if (!$sslDisabled) {
+        if ($caPath !== '' && is_file($caPath)) {
+            $options[PDO::MYSQL_ATTR_SSL_CA] = $caPath;
+
+            if (defined('PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT')) {
+                // VERIFY_CA and above check the certificate against the CA.
+                // Bare REQUIRED still encrypts, it just does not check it.
+                $options[PDO::MYSQL_ATTR_SSL_VERIFY_SERVER_CERT] =
+                    in_array($sslMode, ['verify_ca', 'verify_identity', 'verify-full'], true);
+            }
+        } else {
+            // Never downgrade silently. An operator who asked for TLS and did
+            // not get it has a false sense of security, which is worse than
+            // an outright failure for credentials in transit.
+            error_log(
+                'SECURITY: DB_SSLMODE=' . ($sslMode === '' ? '(unset)' : $sslMode)
+                . ' was requested but DB_SSL_CA does not point at a readable file. '
+                . 'The database connection will be UNENCRYPTED. Download the CA '
+                . 'certificate from the provider console and set DB_SSL_CA.'
+            );
+        }
     }
 
     try {
@@ -219,6 +243,21 @@ function db(): PDO
     }
 
     return $pdo;
+}
+
+/**
+ * Reports whether the live connection is actually encrypted.
+ * Used by /setup.php so TLS can be verified rather than assumed.
+ */
+function db_uses_tls(PDO $pdo): bool
+{
+    try {
+        $cipher = $pdo->query("SHOW STATUS LIKE 'Ssl_cipher'")->fetch();
+    } catch (Throwable $exception) {
+        return false;
+    }
+
+    return isset($cipher['Value']) && $cipher['Value'] !== '';
 }
 
 /**

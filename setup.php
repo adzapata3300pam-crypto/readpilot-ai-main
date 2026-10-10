@@ -71,6 +71,25 @@ try {
     $serverVersion = (string) $pdo->query('SELECT VERSION()')->fetchColumn();
     $checks[] = check('Database connection', true, 'MySQL ' . $serverVersion);
 
+    // Verified against the live session rather than assumed from config.
+    $tlsActive = db_uses_tls($pdo);
+    $checks[] = check(
+        'Database connection is encrypted',
+        $tlsActive,
+        $tlsActive
+            ? 'TLS active'
+            : 'UNENCRYPTED - credentials are crossing the network in plain text. See the note below.'
+    );
+
+    $requestedTls = strtolower(readpilot_setting_any('DB_SSLMODE', 'DB_SSL'));
+    if (!$tlsActive && $requestedTls !== '' && !in_array($requestedTls, ['disable', 'disabled', 'false', 'off', '0'], true)) {
+        $checks[] = check(
+            'TLS requested but not applied',
+            false,
+            'DB_SSLMODE=' . $requestedTls . ' cannot be honoured without DB_SSL_CA'
+        );
+    }
+
     $expected = [
         'users', 'students', 'sections', 'reading_sessions', 'resources',
         'recommendations', 'access_requests', 'audit_logs', 'teacher_quizzes',
@@ -197,9 +216,15 @@ $optional[] = check(
 
   <h2>Hardening</h2>
   <div class="note">
-    Every seed account in <code>database.sql</code> shares the password
+    <p><b>Enabling TLS to the database.</b> The PDO MySQL DSN has no
+    <code>sslmode</code> keyword, so setting <code>DB_SSLMODE</code> alone does
+    nothing. Download the CA certificate from your provider's console, save it
+    as <code>certs/ca.pem</code> in the project, and set
+    <code>DB_SSL_CA=/var/www/html/certs/ca.pem</code>. On Aiven the certificate
+    is under <b>Connection information &rarr; CA certificate &rarr; Download</b>.</p>
+    <p>Every seed account in <code>database.sql</code> shares the password
     <code>ReadPilot2026!</code>. Change or delete those accounts before the site
-    is reachable by anyone other than you.
+    is reachable by anyone other than you.</p>
   </div>
 </div>
 </body>

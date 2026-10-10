@@ -1,0 +1,21 @@
+# Nothing inside uploads/ may ever be executed.
+#
+# This directory only ever holds profile images. Teacher ID documents live in
+# READPILOT_PRIVATE_DIR, outside the document root entirely.
+#
+# The container enforces the same rules in
+# docker/apache-readpilot-security.conf, because php:8.3-apache sets
+# "AllowOverride None" and would otherwise ignore this file.
+
+Options -Indexes -ExecCGI
+
+<IfModule mod_php.c>
+    php_flag engine off
+</IfModule>
+
+<FilesMatch "\.(php|phtml|phar|pl|py|pyc|cgi|cgi\.pl|sh|bash|exe|so|htaccess)$">
+    Require all denied
+</FilesMatch>
+
+RemoveHandler .php .phtml .phar
+RemoveType .php .phtml .phar

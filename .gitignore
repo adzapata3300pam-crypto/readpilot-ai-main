@@ -1,0 +1,22 @@
+# Secrets — never commit these.
+readpilot.secrets.php
+readpilot-secrets.php
+cookies.txt
+.env
+.env.*
+
+# Dependencies are restored by `composer install` during the image build, and
+# .dockerignore keeps them out of the build context, so there is no reason to
+# version 1.2 MB of third-party code here.
+vendor/
+
+# Runtime user data. Profile photos now live in Supabase Storage; these are
+# only the pre-Supabase local paths plus the directory placeholder.
+uploads/profile/*
+!uploads/.htaccess
+!uploads/profile/.gitkeep
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.log

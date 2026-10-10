@@ -1,0 +1,525 @@
+<?php
+
+declare(strict_types=1);
+
+require_once __DIR__ . '/auth-guard.php';
+header('Content-Type: application/json; charset=utf-8');
+
+function json_response(array $data, int $status = 200): never
+{
+    http_response_code($status);
+    echo json_encode($data);
+    exit;
+}
+
+$user = current_user();
+if (!$user || ($user['role'] ?? '') !== 'teacher') {
+    json_response(['error' => 'Your session expired. Please sign in again.'], 401);
+}
+$pdo = db();
+
+function owned_student(PDO $pdo, int $teacherId, int $studentId): array
+{
+    $statement = $pdo->prepare('SELECT * FROM students WHERE id = ? AND teacher_id = ? LIMIT 1');
+    $statement->execute([$studentId, $teacherId]);
+    $student = $statement->fetch();
+    if (!$student) {
+        json_response(['error' => 'Student not found'], 404);
+    }
+    return $student;
+}
+
+$teacherId = (int) $user['id'];
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    if (($_GET['view'] ?? '') === 'sessions') {
+        $statement = $pdo->prepare(
+            'SELECT rs.id, rs.student_id AS studentId, rs.book, rs.wpm, rs.accuracy, rs.duration_seconds, rs.tricky_words, UNIX_TIMESTAMP(rs.created_at) * 1000 AS ts,
+                    e.overall_progress_status AS ai_status, e.fluency_rating AS ai_fluency, e.comprehension_rating AS ai_comprehension,
+                    e.progress_narrative AS ai_narrative, e.phonics_insight AS ai_phonics, e.comprehension_insight AS ai_comprehension_insight,
+                    e.actionable_next_step AS ai_next_step, e.strengths_json, e.struggles_json,
+                    qa.score AS quiz_score, qa.total_questions AS quiz_total
+             FROM reading_sessions rs 
+             LEFT JOIN session_ai_evaluations e ON e.session_id = rs.id
+             LEFT JOIN quiz_attempts qa ON qa.session_id = rs.id OR (qa.id = e.quiz_attempt_id)
+             WHERE rs.teacher_id = ? ORDER BY rs.created_at DESC'
+        );
+        $statement->execute([$teacherId]);
+        $sessions = $statement->fetchAll();
+        $studentStatement = $pdo->prepare('SELECT s.id, s.name, s.color, s.book, sec.name AS section FROM students s INNER JOIN sections sec ON sec.id = s.section_id WHERE s.teacher_id = ? ORDER BY s.name');
+        $studentStatement->execute([$teacherId]);
+        $roster = $studentStatement->fetchAll();
+        $quizStatement = $pdo->prepare(
+            'SELECT qa.id AS attempt_id, qa.student_id AS studentId, qa.title, qa.score, qa.total_questions,
+                    UNIX_TIMESTAMP(qa.created_at) * 1000 AS ts
+             FROM quiz_attempts qa
+             INNER JOIN students s ON s.id = qa.student_id AND s.teacher_id = qa.teacher_id
+             WHERE qa.teacher_id = ? ORDER BY qa.created_at DESC'
+        );
+        $quizStatement->execute([$teacherId]);
+        $quizReports = $quizStatement->fetchAll();
+        foreach ($quizReports as &$quizReport) {
+            $quizReport['attempt_id'] = (int) $quizReport['attempt_id'];
+            $quizReport['studentId'] = (int) $quizReport['studentId'];
+            $quizReport['score'] = (int) $quizReport['score'];
+            $quizReport['total_questions'] = (int) $quizReport['total_questions'];
+            $quizReport['ts'] = (int) $quizReport['ts'];
+        }
+        unset($quizReport);
+        foreach ($sessions as &$session) {
+            $session['id'] = (int) $session['id'];
+            $session['studentId'] = (int) $session['studentId'];
+            $session['wpm'] = (int) $session['wpm'];
+            $session['accuracy'] = (int) $session['accuracy'];
+            $session['duration_seconds'] = (int) ($session['duration_seconds'] ?? 0);
+            $session['ts'] = (int) $session['ts'];
+            $session['quiz_score'] = $session['quiz_score'] !== null ? (int) $session['quiz_score'] : null;
+            $session['quiz_total'] = $session['quiz_total'] !== null ? (int) $session['quiz_total'] : null;
+            $session['strengths'] = !empty($session['strengths_json']) ? (json_decode((string)$session['strengths_json'], true) ?: []) : [];
+            $session['struggles'] = !empty($session['struggles_json']) ? (json_decode((string)$session['struggles_json'], true) ?: []) : [];
+            unset($session['strengths_json'], $session['struggles_json']);
+        }
+
+        foreach ($roster as &$student) {
+            $student['id'] = (int) $student['id'];
+        }
+        json_response(['students' => $roster, 'sessions' => $sessions, 'quiz_reports' => $quizReports]);
+    }
+    if (($_GET['view'] ?? '') === 'reports') {
+        $sectionStatement = $pdo->prepare('SELECT id, name FROM sections WHERE teacher_id = ? ORDER BY name');
+        $sectionStatement->execute([$teacherId]);
+        $reportSections = $sectionStatement->fetchAll();
+        $studentStatement = $pdo->prepare(
+            'SELECT s.id, s.name, s.color, s.wpm, s.accuracy, sec.name AS section,
+                    (SELECT e.overall_progress_status FROM session_ai_evaluations e WHERE e.student_id = s.id AND e.teacher_id = s.teacher_id ORDER BY e.created_at DESC, e.id DESC LIMIT 1) AS ai_progress_status,
+                    (SELECT e.progress_narrative FROM session_ai_evaluations e WHERE e.student_id = s.id AND e.teacher_id = s.teacher_id ORDER BY e.created_at DESC, e.id DESC LIMIT 1) AS ai_narrative,
+                    (SELECT e.phonics_insight FROM session_ai_evaluations e WHERE e.student_id = s.id AND e.teacher_id = s.teacher_id ORDER BY e.created_at DESC, e.id DESC LIMIT 1) AS ai_phonics,
+                    (SELECT e.comprehension_insight FROM session_ai_evaluations e WHERE e.student_id = s.id AND e.teacher_id = s.teacher_id ORDER BY e.created_at DESC, e.id DESC LIMIT 1) AS ai_comprehension_insight,
+                    (SELECT e.comprehension_rating FROM session_ai_evaluations e WHERE e.student_id = s.id AND e.teacher_id = s.teacher_id ORDER BY e.created_at DESC, e.id DESC LIMIT 1) AS ai_comprehension_rating,
+                    (SELECT e.fluency_rating FROM session_ai_evaluations e WHERE e.student_id = s.id AND e.teacher_id = s.teacher_id ORDER BY e.created_at DESC, e.id DESC LIMIT 1) AS ai_fluency,
+                    (SELECT e.struggles_json FROM session_ai_evaluations e WHERE e.student_id = s.id AND e.teacher_id = s.teacher_id ORDER BY e.created_at DESC, e.id DESC LIMIT 1) AS ai_struggles_json,
+                    (SELECT e.actionable_next_step FROM session_ai_evaluations e WHERE e.student_id = s.id AND e.teacher_id = s.teacher_id ORDER BY e.created_at DESC, e.id DESC LIMIT 1) AS ai_next_step
+             FROM students s 
+             INNER JOIN sections sec ON sec.id = s.section_id AND sec.teacher_id = s.teacher_id
+             WHERE s.teacher_id = ? ORDER BY s.name'
+        );
+        $studentStatement->execute([$teacherId]);
+        $studentRows = $studentStatement->fetchAll();
+        $sessionStatement = $pdo->prepare(
+            'SELECT rs.id, rs.student_id AS studentId, rs.book, rs.wpm, rs.accuracy, rs.tricky_words, UNIX_TIMESTAMP(rs.created_at) * 1000 AS ts,
+                    e.overall_progress_status AS ai_status, e.fluency_rating AS ai_fluency, e.comprehension_rating AS ai_comprehension_rating,
+                    e.progress_narrative AS ai_narrative, e.phonics_insight AS ai_phonics, e.comprehension_insight AS ai_comprehension_insight,
+                    e.struggles_json AS ai_struggles_json, e.actionable_next_step AS ai_next_step
+             FROM reading_sessions rs 
+             LEFT JOIN session_ai_evaluations e ON e.session_id = rs.id AND e.teacher_id = rs.teacher_id AND e.student_id = rs.student_id
+             WHERE rs.teacher_id = ? ORDER BY rs.created_at DESC'
+        );
+        $sessionStatement->execute([$teacherId]);
+        $reportSessions = $sessionStatement->fetchAll();
+        $quizReportStatement = $pdo->prepare(
+            'SELECT qa.id AS attempt_id, qa.student_id AS studentId, qa.title, qa.score, qa.total_questions,
+                    UNIX_TIMESTAMP(qa.created_at) * 1000 AS ts
+             FROM quiz_attempts qa
+             INNER JOIN students s ON s.id = qa.student_id AND s.teacher_id = qa.teacher_id
+             WHERE qa.teacher_id = ? ORDER BY qa.created_at DESC'
+        );
+        $quizReportStatement->execute([$teacherId]);
+        $quizReports = $quizReportStatement->fetchAll();
+        foreach ($quizReports as &$quizReport) {
+            $quizReport['attempt_id'] = (int) $quizReport['attempt_id'];
+            $quizReport['studentId'] = (int) $quizReport['studentId'];
+            $quizReport['score'] = (int) $quizReport['score'];
+            $quizReport['total_questions'] = (int) $quizReport['total_questions'];
+            $quizReport['ts'] = (int) $quizReport['ts'];
+        }
+        unset($quizReport);
+        foreach ($reportSessions as &$session) {
+            $session['id'] = (int) $session['id'];
+            $session['studentId'] = (int) $session['studentId'];
+            $session['wpm'] = (int) $session['wpm'];
+            $session['accuracy'] = (int) $session['accuracy'];
+            $session['ts'] = (int) $session['ts'];
+            $session['ai_struggles'] = json_decode((string) ($session['ai_struggles_json'] ?? ''), true) ?: [];
+            unset($session['ai_struggles_json']);
+        }
+        foreach ($studentRows as &$student) {
+            $student['id'] = (int) $student['id'];
+            $student['ai_struggles'] = json_decode((string) ($student['ai_struggles_json'] ?? ''), true) ?: [];
+            unset($student['ai_struggles_json']);
+        }
+        unset($student);
+        $resourceStatement = $pdo->prepare(
+            'SELECT id, title, genre, level, lexile, words, description, tags_json
+             FROM resources WHERE created_by IS NULL OR created_by = ? ORDER BY title'
+        );
+        $resourceStatement->execute([$teacherId]);
+        $recommendationResources = $resourceStatement->fetchAll();
+        foreach ($recommendationResources as &$resource) {
+            $resource['id'] = (int) $resource['id'];
+            $resource['words'] = (int) $resource['words'];
+            $resource['tags'] = json_decode((string) $resource['tags_json'], true) ?: [];
+            unset($resource['tags_json']);
+        }
+        unset($resource);
+        json_response([
+            'students' => $studentRows,
+            'sessions' => $reportSessions,
+            'quiz_reports' => $quizReports,
+            'sections' => $reportSections,
+            'recommendation_resources' => $recommendationResources
+        ]);
+    }
+
+    if (($_GET['view'] ?? '') === 'resources') {
+        $statement = $pdo->prepare('SELECT r.id, r.title, r.author, r.genre, r.level, r.lexile, r.words, r.description AS `desc`, r.tags_json, r.story_json, r.created_by, COUNT(ra.id) AS assigned, (SELECT rm.content_text FROM resource_materials rm WHERE rm.resource_id = r.id AND rm.teacher_id = ? ORDER BY rm.id DESC LIMIT 1) AS content FROM resources r LEFT JOIN resource_assignments ra ON ra.resource_id = r.id AND ra.teacher_id = ? WHERE r.created_by IS NULL OR r.created_by = ? GROUP BY r.id, r.created_by ORDER BY r.title');
+        $statement->execute([$teacherId, $teacherId, $teacherId]);
+        $resources = $statement->fetchAll();
+        foreach ($resources as &$resource) {
+            $resource['id'] = (int) $resource['id'];
+            $resource['words'] = (int) $resource['words'];
+            $resource['assigned'] = (int) $resource['assigned'];
+            // Only rows this teacher actually created may be deleted. The shared
+            // seed library (created_by IS NULL) is read-only for everyone.
+            $resource['canDelete'] = ((int) $resource['created_by'] === $teacherId);
+            unset($resource['created_by']);
+            $resource['tags'] = json_decode($resource['tags_json'], true) ?: [];
+            $resource['story'] = json_decode((string) ($resource['story_json'] ?? ''), true) ?: [];
+            unset($resource['tags_json'], $resource['story_json']);
+        }
+        json_response(['resources' => $resources]);
+    }
+    if (($_GET['view'] ?? '') === 'quizzes') {
+        $statement = $pdo->prepare('SELECT id, resource_id, title, questions_json FROM teacher_quizzes WHERE teacher_id = ? ORDER BY title');
+        $statement->execute([$teacherId]);
+        $quizzes = $statement->fetchAll();
+        foreach ($quizzes as &$quiz) {
+            $quiz['id'] = (int) $quiz['id'];
+            $quiz['resource_id'] = $quiz['resource_id'] === null ? null : (int) $quiz['resource_id'];
+            $quiz['questions'] = json_decode($quiz['questions_json'], true) ?: [];
+            unset($quiz['questions_json']);
+        }
+        json_response(['quizzes' => $quizzes]);
+    }
+    if (($_GET['view'] ?? '') === 'dashboard') {
+        $studentStatement = $pdo->prepare('SELECT id, name, color, status FROM students WHERE teacher_id = ?');
+        $studentStatement->execute([$teacherId]);
+        $sessionStatement = $pdo->prepare('SELECT rs.id, rs.student_id AS studentId, s.name AS studentName, s.color, rs.book, rs.wpm, rs.accuracy, UNIX_TIMESTAMP(rs.created_at) * 1000 AS ts FROM reading_sessions rs INNER JOIN students s ON s.id = rs.student_id AND s.teacher_id = rs.teacher_id WHERE rs.teacher_id = ? ORDER BY rs.created_at DESC LIMIT 5');
+        $sessionStatement->execute([$teacherId]);
+        $summaryStatement = $pdo->prepare('SELECT COUNT(*) AS total, COALESCE(ROUND(AVG(wpm)), 0) AS average_wpm FROM reading_sessions WHERE teacher_id = ?');
+        $summaryStatement->execute([$teacherId]);
+        json_response(['students' => $studentStatement->fetchAll(), 'sessions' => $sessionStatement->fetchAll(), 'summary' => $summaryStatement->fetch()]);
+    }
+    if (($_GET['view'] ?? '') === 'struggle') {
+        $statement = $pdo->prepare('SELECT rs.tricky_words, s.name AS student_name, s.color FROM reading_sessions rs INNER JOIN students s ON s.id = rs.student_id WHERE rs.teacher_id = ? AND rs.tricky_words <> \'\'');
+        $statement->execute([$teacherId]);
+        $words = [];
+        foreach ($statement->fetchAll() as $row) {
+            foreach (array_filter(array_map('trim', explode(',', (string) $row['tricky_words']))) as $word) {
+                $key = strtolower($word);
+                if (!isset($words[$key])) $words[$key] = ['word' => $word, 'count' => 0, 'students' => [], 'recent' => true];
+                $words[$key]['count']++;
+                if (!in_array($row['student_name'], $words[$key]['students'], true)) $words[$key]['students'][] = $row['student_name'];
+            }
+        }
+        json_response(['words' => array_values($words)]);
+    }
+    $sections = $pdo->prepare('SELECT id, name FROM sections WHERE teacher_id = ? ORDER BY name');
+    $sections->execute([$teacherId]);
+    $students = $pdo->prepare(
+        'SELECT s.id, s.name, s.color, s.book, s.wpm, s.accuracy, s.sessions_count AS sessions, s.sessions_this_week AS sessionsThisWeek, s.books_completed AS booksCompleted, s.status, s.last_active AS lastActive, s.notes, sec.name AS section
+         FROM students s INNER JOIN sections sec ON sec.id = s.section_id
+         WHERE s.teacher_id = ? ORDER BY s.name'
+    );
+    $students->execute([$teacherId]);
+    $rows = $students->fetchAll();
+    foreach ($rows as &$row) {
+        $row['id'] = (int) $row['id'];
+        $row['wpm'] = (int) $row['wpm'];
+        $row['accuracy'] = (int) $row['accuracy'];
+        $row['sessions'] = (int) $row['sessions'];
+        $row['sessionsThisWeek'] = (int) $row['sessionsThisWeek'];
+        $row['booksCompleted'] = (int) $row['booksCompleted'];
+        $logStatement = $pdo->prepare('SELECT book, DATE_FORMAT(created_at, "%b %e · %l:%i %p") AS date, wpm, accuracy FROM reading_sessions WHERE teacher_id = ? AND student_id = ? ORDER BY created_at DESC LIMIT 5');
+        $logStatement->execute([$teacherId, $row['id']]);
+        $row['log'] = $logStatement->fetchAll();
+    }
+    json_response(['sections' => $sections->fetchAll(), 'students' => $rows]);
+}
+
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    json_response(['error' => 'Method not allowed'], 405);
+}
+
+$action = $_POST['action'] ?? '';
+try {
+    if ($action === 'save_student') {
+        $id = (int) ($_POST['id'] ?? 0);
+        $name = trim((string) ($_POST['name'] ?? ''));
+        $sectionId = (int) ($_POST['section_id'] ?? 0);
+        $color = trim((string) ($_POST['color'] ?? '#6fbf5a'));
+        $book = trim((string) ($_POST['book'] ?? ''));
+        if ($name === '' || $sectionId < 1) json_response(['error' => 'Name and section are required'], 422);
+        $duplicateCheck = $pdo->prepare('SELECT id FROM students WHERE teacher_id = ? AND name = ? AND id <> ? LIMIT 1');
+        $duplicateCheck->execute([$teacherId, $name, $id]);
+        if ($duplicateCheck->fetchColumn()) json_response(['error' => 'A student with this name already exists'], 409);
+        $check = $pdo->prepare('SELECT id FROM sections WHERE id = ? AND teacher_id = ?');
+        $check->execute([$sectionId, $teacherId]);
+        if (!$check->fetchColumn()) json_response(['error' => 'Section does not belong to this teacher'], 403);
+        if ($id > 0) {
+            owned_student($pdo, $teacherId, $id);
+            $statement = $pdo->prepare('UPDATE students SET name = ?, section_id = ?, color = ?, book = ? WHERE id = ? AND teacher_id = ?');
+            $statement->execute([$name, $sectionId, $color, $book, $id, $teacherId]);
+        } else {
+            $statement = $pdo->prepare('INSERT INTO students (teacher_id, section_id, name, color, book) VALUES (?, ?, ?, ?, ?)');
+            $statement->execute([$teacherId, $sectionId, $name, $color, $book]);
+            $id = (int) $pdo->lastInsertId();
+        }
+        json_response(['ok' => true, 'id' => $id]);
+    }
+    // NEW: rename a student (name only). Used by the "Edit name" button in the student profile pop-up.
+    if ($action === 'update_student') {
+        $id = (int) ($_POST['id'] ?? 0);
+        $name = trim((string) preg_replace('/\s+/u', ' ', (string) ($_POST['name'] ?? '')));
+        if ($id < 1) json_response(['error' => 'Student not found'], 422);
+        if ($name === '') json_response(['error' => 'Student name is required'], 422);
+        if (mb_strlen($name, 'UTF-8') > 120) json_response(['error' => 'Student name is too long (120 characters max)'], 422);
+        owned_student($pdo, $teacherId, $id);
+        $duplicateCheck = $pdo->prepare('SELECT id FROM students WHERE teacher_id = ? AND name = ? AND id <> ? LIMIT 1');
+        $duplicateCheck->execute([$teacherId, $name, $id]);
+        if ($duplicateCheck->fetchColumn()) json_response(['error' => 'A student with this name already exists'], 409);
+        $pdo->prepare('UPDATE students SET name = ? WHERE id = ? AND teacher_id = ?')->execute([$name, $id, $teacherId]);
+        json_response(['ok' => true, 'id' => $id, 'name' => $name]);
+    }
+    if ($action === 'deactivate_student') {
+        $id = (int) ($_POST['id'] ?? 0);
+        $reason = trim((string) ($_POST['reason'] ?? ''));
+        $student = owned_student($pdo, $teacherId, $id);
+        if ($reason === '') json_response(['error' => 'A reason is required before deactivating a student'], 422);
+        $note = trim((string) $student['notes']);
+        $deactivationNote = 'Deactivated ' . date('Y-m-d H:i') . ': ' . $reason;
+        $notes = $note === '' ? $deactivationNote : $note . "\n" . $deactivationNote;
+        $pdo->prepare('UPDATE students SET status = \'inactive\', notes = ? WHERE id = ? AND teacher_id = ?')->execute([$notes, $id, $teacherId]);
+        json_response(['ok' => true]);
+    }
+    if ($action === 'update_sections') {
+        $names = json_decode((string) ($_POST['names'] ?? '[]'), true);
+        if (!is_array($names) || count($names) !== 3 || count(array_unique(array_map('strtolower', $names))) !== 3) json_response(['error' => 'Three unique section names are required'], 422);
+        $pdo->beginTransaction();
+        $current = $pdo->prepare('SELECT id FROM sections WHERE teacher_id = ? ORDER BY id');
+        $current->execute([$teacherId]);
+        $ids = $current->fetchAll(PDO::FETCH_COLUMN);
+        if (count($ids) !== 3) json_response(['error' => 'Teacher sections are not initialized'], 409);
+        $update = $pdo->prepare('UPDATE sections SET name = ? WHERE id = ? AND teacher_id = ?');
+        foreach ($ids as $index => $sectionId) $update->execute([trim((string) $names[$index]), $sectionId, $teacherId]);
+        $pdo->commit();
+        json_response(['ok' => true]);
+    }
+    if ($action === 'add_section') {
+        $name = trim((string) ($_POST['name'] ?? ''));
+        if ($name === '') json_response(['error' => 'Section name is required'], 422);
+        if (mb_strlen($name) > 80) json_response(['error' => 'Section name is too long'], 422);
+        $duplicate = $pdo->prepare('SELECT id FROM sections WHERE teacher_id = ? AND LOWER(name) = LOWER(?)');
+        $duplicate->execute([$teacherId, $name]);
+        if ($duplicate->fetchColumn()) json_response(['error' => 'That section already exists'], 409);
+        $statement = $pdo->prepare('INSERT INTO sections (teacher_id, name) VALUES (?, ?)');
+        $statement->execute([$teacherId, $name]);
+        json_response(['ok' => true, 'id' => (int) $pdo->lastInsertId()]);
+    }
+    if ($action === 'save_note') {
+        $id = (int) ($_POST['id'] ?? 0);
+        owned_student($pdo, $teacherId, $id);
+        $pdo->prepare('UPDATE students SET notes = ? WHERE id = ? AND teacher_id = ?')->execute([(string) ($_POST['notes'] ?? ''), $id, $teacherId]);
+        json_response(['ok' => true]);
+    }
+    if ($action === 'record_session') {
+        $studentId = (int) ($_POST['student_id'] ?? 0);
+        $student = owned_student($pdo, $teacherId, $studentId);
+        if ($student['status'] === 'inactive') json_response(['error' => 'Inactive student records cannot receive new sessions'], 409);
+        $wpm = max(1, (int) ($_POST['wpm'] ?? 0));
+        $accuracy = min(100, max(0, (int) ($_POST['accuracy'] ?? 0)));
+        $book = trim((string) ($_POST['book'] ?? 'Free Reading'));
+        $pdo->beginTransaction();
+        $pdo->prepare('INSERT INTO reading_sessions (teacher_id, student_id, book, wpm, accuracy, duration_seconds, tricky_words) VALUES (?, ?, ?, ?, ?, ?, ?)')->execute([$teacherId, $studentId, $book, $wpm, $accuracy, (int) ($_POST['duration_seconds'] ?? 0), (string) ($_POST['tricky_words'] ?? '')]);
+        $sessionId = (int) $pdo->lastInsertId(); // NEW: needed so the recording can be linked to this session
+        $newCount = (int) $student['sessions_count'] + 1;
+        $newWpm = (int) round((((int) $student['wpm'] * (int) $student['sessions_count']) + $wpm) / $newCount);
+        $newAccuracy = (int) round((((int) $student['accuracy'] * (int) $student['sessions_count']) + $accuracy) / $newCount);
+        $pdo->prepare('UPDATE students SET wpm = ?, accuracy = ?, sessions_count = ?, sessions_this_week = sessions_this_week + 1, last_active = NOW(), status = ? WHERE id = ? AND teacher_id = ?')->execute([$newWpm, $newAccuracy, $newCount, $newAccuracy < 82 ? 'support' : 'ontrack', $studentId, $teacherId]);
+        $pdo->commit();
+        json_response(['ok' => true, 'session_id' => $sessionId]); // CHANGED: now returns session_id
+    }
+    if ($action === 'record_quiz') {
+        $studentId = (int) ($_POST['student_id'] ?? 0);
+        owned_student($pdo, $teacherId, $studentId);
+        $title = trim((string) ($_POST['title'] ?? 'Quiz'));
+        $score = max(0, (int) ($_POST['score'] ?? 0));
+        $total = max(0, (int) ($_POST['total_questions'] ?? 0));
+        $sessionId = filter_input(INPUT_POST, 'session_id', FILTER_VALIDATE_INT) ?: null;
+
+        // Auto-match session if not explicitly passed
+        if (!$sessionId) {
+            $recentSess = $pdo->prepare('SELECT id FROM reading_sessions WHERE teacher_id = ? AND student_id = ? AND (book = ? OR ? LIKE CONCAT("%", book, "%")) ORDER BY created_at DESC LIMIT 1');
+            $recentSess->execute([$teacherId, $studentId, $title, $title]);
+            $foundSessionId = $recentSess->fetchColumn();
+            if ($foundSessionId) {
+                $sessionId = (int) $foundSessionId;
+            }
+        }
+
+        $pdo->prepare('INSERT INTO quiz_attempts (teacher_id, student_id, session_id, title, score, total_questions) VALUES (?, ?, ?, ?, ?, ?)')
+            ->execute([$teacherId, $studentId, $sessionId, $title, $score, $total]);
+        $quizAttemptId = (int) $pdo->lastInsertId();
+
+        // If we have a linked session, re-trigger AI evaluation so quiz + reading performance are synthesized
+        if ($sessionId) {
+            try {
+                require_once __DIR__ . '/ai-api.php';
+                $sessStmt = $pdo->prepare('SELECT * FROM reading_sessions WHERE id = ? AND teacher_id = ? LIMIT 1');
+                $sessStmt->execute([$sessionId, $teacherId]);
+                $sessionRow = $sessStmt->fetch();
+                if ($sessionRow) {
+                    $stuStmt = $pdo->prepare('SELECT s.*, u.grade_level FROM students s LEFT JOIN users u ON u.id = s.teacher_id WHERE s.id = ?');
+                    $stuStmt->execute([$studentId]);
+                    $stuRow = $stuStmt->fetch() ?: [];
+
+                    $histStmt = $pdo->prepare('SELECT AVG(wpm) AS avg_wpm, AVG(accuracy) AS avg_acc FROM reading_sessions WHERE student_id = ? AND teacher_id = ? AND id <> ?');
+                    $histStmt->execute([$studentId, $teacherId, $sessionId]);
+                    $histRow = $histStmt->fetch() ?: [];
+
+                    $quizData = ['id' => $quizAttemptId, 'score' => $score, 'total_questions' => $total];
+                    $apiKey = get_gemini_api_key();
+                    $evaluation = ($apiKey !== '') ? call_gemini_api($apiKey, $sessionRow, $quizData, $stuRow, $histRow) : null;
+                    if ($evaluation === null) {
+                        $evaluation = evaluate_session_heuristically($sessionRow, $quizData, $stuRow, $histRow);
+                    }
+
+                    $upsert = $pdo->prepare(
+                        'INSERT INTO session_ai_evaluations 
+                         (teacher_id, student_id, session_id, quiz_attempt_id, fluency_rating, comprehension_rating, overall_progress_status, progress_narrative, phonics_insight, comprehension_insight, strengths_json, struggles_json, actionable_next_step, model_name)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         ON DUPLICATE KEY UPDATE 
+                            quiz_attempt_id = VALUES(quiz_attempt_id),
+                            fluency_rating = VALUES(fluency_rating),
+                            comprehension_rating = VALUES(comprehension_rating),
+                            overall_progress_status = VALUES(overall_progress_status),
+                            progress_narrative = VALUES(progress_narrative),
+                            phonics_insight = VALUES(phonics_insight),
+                            comprehension_insight = VALUES(comprehension_insight),
+                            strengths_json = VALUES(strengths_json),
+                            struggles_json = VALUES(struggles_json),
+                            actionable_next_step = VALUES(actionable_next_step),
+                            model_name = VALUES(model_name)'
+                    );
+                    $upsert->execute([
+                        $teacherId, $studentId, $sessionId, $quizAttemptId,
+                        $evaluation['fluency_rating'], $evaluation['comprehension_rating'], $evaluation['overall_progress_status'],
+                        $evaluation['progress_narrative'], $evaluation['phonics_insight'], $evaluation['comprehension_insight'],
+                        json_encode($evaluation['strengths_json'], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+                        json_encode($evaluation['struggles_json'], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+                        $evaluation['actionable_next_step'], $evaluation['model_name']
+                    ]);
+                }
+            } catch (Throwable $e) {
+                error_log('Quiz AI evaluation trigger error: ' . $e->getMessage());
+            }
+        }
+
+        require_once __DIR__ . '/quiz-report-helper.php';
+        ensure_quiz_ai_report($pdo, $teacherId, $quizAttemptId);
+        json_response(['ok' => true, 'id' => $quizAttemptId, 'session_id' => $sessionId, 'quiz_report_id' => $quizAttemptId]);
+    }
+
+    if ($action === 'delete_session') {
+        $sessionId = (int) ($_POST['id'] ?? 0);
+        if ($sessionId < 1) json_response(['error' => 'Session not found'], 422);
+
+        // NEW: look up the cloud recording (if any) before the session row goes away
+        $recordingLookup = $pdo->prepare('SELECT storage_key FROM session_recordings WHERE session_id = ? AND teacher_id = ?');
+        $recordingLookup->execute([$sessionId, $teacherId]);
+        $recordingKey = $recordingLookup->fetchColumn();
+
+        $statement = $pdo->prepare('DELETE FROM reading_sessions WHERE id = ? AND teacher_id = ?');
+        $statement->execute([$sessionId, $teacherId]);
+        if ($statement->rowCount() !== 1) json_response(['error' => 'Session not found'], 404);
+
+        // NEW: remove the recording row and the file in the bucket too
+        if ($recordingKey) {
+            $pdo->prepare('DELETE FROM session_recordings WHERE session_id = ? AND teacher_id = ?')->execute([$sessionId, $teacherId]);
+            try {
+                require_once __DIR__ . '/storage.php';
+                delete_recording_object((string) $recordingKey);
+            } catch (Throwable $storageError) {
+                // Session is already deleted; don't fail the request if the cloud delete hiccups.
+            }
+        }
+        json_response(['ok' => true]);
+    }
+    if ($action === 'assign_resource') {
+        $resourceId = (int) ($_POST['resource_id'] ?? 0);
+        $studentId = (int) ($_POST['student_id'] ?? 0);
+        owned_student($pdo, $teacherId, $studentId);
+        $resourceCheck = $pdo->prepare('SELECT id FROM resources WHERE id = ?');
+        $resourceCheck->execute([$resourceId]);
+        if (!$resourceCheck->fetchColumn()) json_response(['error' => 'Resource not found'], 404);
+        $pdo->prepare('INSERT INTO resource_assignments (teacher_id, resource_id, student_id) VALUES (?, ?, ?)')->execute([$teacherId, $resourceId, $studentId]);
+        json_response(['ok' => true]);
+    }
+    if ($action === 'delete_resource') {
+        $resourceId = (int) ($_POST['resource_id'] ?? 0);
+        if ($resourceId < 1) json_response(['error' => 'Resource not found'], 422);
+        // Ownership must be enforced in the DELETE itself. Relying on the
+        // preceding SELECT only proves the row exists; it would otherwise let
+        // any teacher delete every other teacher's resources (and the shared
+        // created_by IS NULL seed rows) by walking the id space.
+        $delete = $pdo->prepare('DELETE FROM resources WHERE id = ? AND created_by = ?');
+        $delete->execute([$resourceId, $teacherId]);
+        if ($delete->rowCount() !== 1) json_response(['error' => 'Resource could not be removed'], 404);
+        json_response(['ok' => true]);
+    }
+    if ($action === 'save_resource') {
+        $title = trim((string) ($_POST['title'] ?? ''));
+        if ($title === '') json_response(['error' => 'Resource title is required'], 422);
+        $content = trim((string) ($_POST['content'] ?? ''));
+        if ($content === '') json_response(['error' => 'No readable text was extracted from this file'], 422);
+        if (mb_strlen($content, 'UTF-8') > 1000000) json_response(['error' => 'Extracted text is too long. Please upload a smaller document.'], 413);
+        $baseTitle = mb_substr($title, 0, 190, 'UTF-8');
+        $pdo->beginTransaction();
+        $titleCheck = $pdo->prepare('SELECT 1 FROM resources WHERE title = ? LIMIT 1');
+        $savedTitle = $baseTitle;
+        $suffix = 2;
+        while (true) {
+            $titleCheck->execute([$savedTitle]);
+            if (!$titleCheck->fetchColumn()) break;
+            $suffixText = ' (' . $suffix++ . ')';
+            $savedTitle = mb_substr($baseTitle, 0, 190 - mb_strlen($suffixText, 'UTF-8'), 'UTF-8') . $suffixText;
+        }
+        $statement = $pdo->prepare('INSERT INTO resources (title, author, genre, level, lexile, words, description, tags_json, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+        $statement->execute([$savedTitle, trim((string) ($_POST['author'] ?? 'Uploaded material')), trim((string) ($_POST['genre'] ?? 'Uploaded')), trim((string) ($_POST['level'] ?? '')), trim((string) ($_POST['lexile'] ?? '')), max(0, (int) ($_POST['words'] ?? 0)), trim((string) ($_POST['description'] ?? '')), '[]', $teacherId]);
+        $resourceId = (int) $pdo->lastInsertId();
+        $material = $pdo->prepare('INSERT INTO resource_materials (resource_id, teacher_id, file_name, mime_type, content_text) VALUES (?, ?, ?, ?, ?)');
+        $material->execute([$resourceId, $teacherId, trim((string) ($_POST['file_name'] ?? $title)), trim((string) ($_POST['mime_type'] ?? 'text/plain')), $content]);
+        $pdo->commit();
+        json_response(['ok' => true, 'id' => $resourceId, 'title' => $savedTitle]);
+    }
+    if ($action === 'save_quiz') {
+        $resourceId = (int) ($_POST['resource_id'] ?? 0);
+        $resourceId = $resourceId > 0 ? $resourceId : null;
+        $title = trim((string) ($_POST['title'] ?? ''));
+        $questions = json_decode((string) ($_POST['questions'] ?? '[]'), true);
+        if ($title === '' || !is_array($questions) || !$questions) json_response(['error' => 'Quiz title and questions are required'], 422);
+        if ($resourceId !== null) {
+            $check = $pdo->prepare('SELECT id FROM resources WHERE id = ? AND (created_by IS NULL OR created_by = ?)');
+            $check->execute([$resourceId, $teacherId]);
+            if (!$check->fetchColumn()) json_response(['error' => 'Resource does not belong to this teacher'], 403);
+        }
+        $statement = $pdo->prepare('INSERT INTO teacher_quizzes (teacher_id, resource_id, title, questions_json) VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE title = VALUES(title), questions_json = VALUES(questions_json)');
+        $statement->execute([$teacherId, $resourceId, $title, json_encode($questions)]);
+        json_response(['ok' => true]);
+    }
+    json_response(['error' => 'Unknown action'], 400);
+} catch (Throwable $exception) {
+    if ($pdo->inTransaction()) $pdo->rollBack();
+    $actionName = is_string($action) ? $action : 'unknown';
+    error_log('Student API action "' . $actionName . '" failed: ' . $exception->getMessage());
+    $message = $actionName === 'save_resource' ? 'Unable to save resource. Please try again.' : 'Unable to save student data';
+    json_response(['error' => $message], 500);
+}

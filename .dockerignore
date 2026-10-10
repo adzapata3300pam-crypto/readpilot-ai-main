@@ -1,0 +1,22 @@
+# Keep the build context small and reproducible.
+
+# Dependency tree: the image runs `composer install` from composer.lock, so a
+# host copy of vendor/ must never leak into the build.
+vendor/
+node_modules/
+
+# Secrets
+.git
+.gitignore
+.env
+.env.*
+cookies.txt
+readpilot-secrets.php
+
+# Local user data. The image recreates uploads/ with the right ownership.
+uploads/profile/
+
+# OS noise
+.DS_Store
+Thumbs.db
+*.log

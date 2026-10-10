@@ -1,0 +1,64 @@
+# Render deployment blueprint for ReadPilot.
+#
+# Create the service with:  New -> Blueprint -> point at this repository.
+# Render will pre-declare every variable below; fill in the values marked
+# "sync: false" and deploy.
+#
+# The MySQL server itself is NOT created by this file. Provision one first
+# (Aiven, PlanetScale, TiDB Cloud, or any TCP-reachable MySQL 8), import
+# database.sql into it, and use its credentials below.
+
+services:
+  - type: web
+    name: readpilot
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: starter
+    region: singapore
+    healthCheckPath: /login.php
+    autoDeploy: true
+
+    envVars:
+      # --- MySQL ---------------------------------------------------------
+      # Fill these in from your database provider. Aiven-style names
+      # (MYSQL_HOST, MYSQL_USER, ...) are accepted as equivalents.
+      - key: DB_HOST
+        sync: false
+      - key: DB_PORT
+        sync: false
+      - key: DB_NAME
+        sync: false
+      - key: DB_USER
+        sync: false
+      - key: DB_PASS
+        sync: false
+
+      # Managed MySQL almost always requires TLS. Use REQUIRED, or
+      # VERIFY_IDENTITY plus DB_SSL_CA pointing at the provider's CA bundle.
+      - key: DB_SSLMODE
+        value: REQUIRED
+
+      # --- Supabase Storage (reading recordings + profile photos) ---------
+      - key: SUPABASE_S3_ENDPOINT
+        sync: false
+      - key: SUPABASE_S3_REGION
+        sync: false
+      - key: SUPABASE_S3_ACCESS_KEY
+        sync: false
+      - key: SUPABASE_S3_SECRET_KEY
+        sync: false
+      - key: SUPABASE_BUCKET
+        sync: false
+
+      # --- AI (optional) --------------------------------------------------
+      # Leave empty to use the built-in heuristic evaluator instead.
+      - key: GEMINI_API_KEY
+        sync: false
+
+      # --- Storage --------------------------------------------------------
+      # Submitted teacher ID documents. Defaults to the container temp
+      # directory; set this to a mounted disk path to keep them across
+      # redeploys.
+      - key: READPILOT_PRIVATE_DIR
+        value: /tmp/readpilot-private

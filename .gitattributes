@@ -1,0 +1,33 @@
+# Force LF everywhere.
+#
+# Windows Git defaults to core.autocrlf=true, which would rewrite the shell
+# scripts to CRLF on checkout and break the container with
+# "/bin/sh^M: bad interpreter". Normalising in the repository is the only
+# reliable place to fix this, since Docker builds from the checked-out tree.
+
+* text=auto eol=lf
+
+*.php   text eol=lf
+*.js    text eol=lf
+*.css   text eol=lf
+*.sql   text eol=lf
+*.json  text eol=lf
+*.yaml  text eol=lf
+*.md    text eol=lf
+*.conf  text eol=lf
+*.ini   text eol=lf
+.htaccess        text eol=lf
+Dockerfile       text eol=lf
+
+# Must stay LF and must stay executable.
+*.sh text eol=lf
+docker/entrypoint.sh text eol=lf
+
+# Binary assets are never touched.
+*.jpg  binary
+*.jpeg binary
+*.png  binary
+*.gif  binary
+*.webp binary
+*.ico  binary
+*.pdf  binary

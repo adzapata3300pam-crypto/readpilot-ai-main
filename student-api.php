@@ -242,7 +242,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'GET') {
         $row['sessions'] = (int) $row['sessions'];
         $row['sessionsThisWeek'] = (int) $row['sessionsThisWeek'];
         $row['booksCompleted'] = (int) $row['booksCompleted'];
-        $logStatement = $pdo->prepare('SELECT book, DATE_FORMAT(created_at, "%b %e · %l:%i %p") AS date, wpm, accuracy FROM reading_sessions WHERE teacher_id = ? AND student_id = ? ORDER BY created_at DESC LIMIT 5');
+        // The format string is single quoted in SQL on purpose. Double quotes
+        // are an identifier quote when the server runs with ANSI_QUOTES, so
+        // "%b %e ..." is then read as a column name and the query fails with
+        // "Unknown column '%b %e ...' in 'field list'". Local MySQL defaults
+        // to accepting double-quoted strings, which is why this only surfaced
+        // after moving to a managed host.
+        $logStatement = $pdo->prepare("SELECT book, DATE_FORMAT(created_at, '%b %e · %l:%i %p') AS date, wpm, accuracy FROM reading_sessions WHERE teacher_id = ? AND student_id = ? ORDER BY created_at DESC LIMIT 5");
         $logStatement->execute([$teacherId, $row['id']]);
         $row['log'] = $logStatement->fetchAll();
     }
@@ -368,7 +374,9 @@ try {
 
         // Auto-match session if not explicitly passed
         if (!$sessionId) {
-            $recentSess = $pdo->prepare('SELECT id FROM reading_sessions WHERE teacher_id = ? AND student_id = ? AND (book = ? OR ? LIKE CONCAT("%", book, "%")) ORDER BY created_at DESC LIMIT 1');
+            // Single quotes for the wildcards, for the same ANSI_QUOTES reason as the
+    // DATE_FORMAT pattern above.
+    $recentSess = $pdo->prepare("SELECT id FROM reading_sessions WHERE teacher_id = ? AND student_id = ? AND (book = ? OR ? LIKE CONCAT('%', book, '%')) ORDER BY created_at DESC LIMIT 1");
             $recentSess->execute([$teacherId, $studentId, $title, $title]);
             $foundSessionId = $recentSess->fetchColumn();
             if ($foundSessionId) {

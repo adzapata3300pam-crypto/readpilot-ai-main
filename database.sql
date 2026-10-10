@@ -11,13 +11,13 @@ CREATE TABLE IF NOT EXISTS users (
   school VARCHAR(160) NOT NULL DEFAULT '',
   grade_level VARCHAR(80) NULL,
   section_name VARCHAR(80) NULL,
-  bio TEXT NOT NULL DEFAULT '',
+  bio TEXT NOT NULL DEFAULT (''),
   status ENUM('active', 'inactive', 'pending') NOT NULL DEFAULT 'active',
   last_login DATETIME NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 ) ENGINE=InnoDB;
 
-ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT NOT NULL DEFAULT '';
+ALTER TABLE users ADD COLUMN IF NOT EXISTS bio TEXT NOT NULL DEFAULT ('');
 ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_image VARCHAR(255) NOT NULL DEFAULT '';
 ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub VARCHAR(255) NULL;
 
@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS students (
   books_completed INT UNSIGNED NOT NULL DEFAULT 0,
   status ENUM('new', 'ontrack', 'support', 'inactive') NOT NULL DEFAULT 'new',
   last_active DATETIME NULL,
-  notes TEXT NOT NULL,
+  notes TEXT NOT NULL DEFAULT (''),
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY uq_teacher_student_name (teacher_id, name),
   INDEX idx_students_teacher (teacher_id),

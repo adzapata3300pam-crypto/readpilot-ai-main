@@ -14,7 +14,11 @@ services:
     runtime: docker
     dockerfilePath: ./Dockerfile
     dockerContext: .
-    plan: starter
+    plan: free
+    # Free instances sleep after ~15 minutes idle, so the first request
+    # afterwards takes a few seconds. Switch to "starter" when you want it
+    # always-on. Keep this region close to wherever your MySQL lives to cut
+    # round-trip latency.
     region: singapore
     healthCheckPath: /login.php
     autoDeploy: true

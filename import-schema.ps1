@@ -278,23 +278,31 @@ if ($exitCode -eq 0) {
     Write-Host 'Import finished.' -ForegroundColor Green
 
     # --- Verify rather than assume ------------------------------------------
-    # Count from information_schema rather than SHOW TABLES: it works no matter
-    # which schema the session happens to be pointed at.
-    $tableCountRaw = Invoke-Scalar "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$Database';"
-    $tableCount = -1
-    if ($tableCountRaw -match '^\d+$') { $tableCount = [int]$tableCountRaw }
+    # SHOW TABLES is used rather than a COUNT(*) over information_schema: it
+    # returns the table names, so the output can be inspected when something
+    # unexpected comes back instead of yielding an unreadable number.
+    $previousVerify = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $tableList = & $mysql @connectionArguments --batch --skip-column-names -e "SHOW TABLES FROM ``$Database``;" 2>&1
+    $ErrorActionPreference = $previousVerify
+
+    $tableNames = @()
+    $tableListErrors = @()
+    foreach ($line in $tableList) {
+        $text = "$line".Trim()
+        if ([string]::IsNullOrWhiteSpace($text)) { continue }
+        if ($text -match '^(ERROR|Warning)') { $tableListErrors += $text; continue }
+        $tableNames += $text
+    }
 
     Write-Host ''
-    if ($tableCount -ge 15) {
-        Write-Host "  Verified: $tableCount tables present in '$Database'." -ForegroundColor Green
-    } elseif ($tableCount -ge 0) {
-        Write-Host "  WARNING: found $tableCount tables in '$Database', expected 15." -ForegroundColor Yellow
-        Write-Host '  If earlier attempts failed part way through, tables already exist' -ForegroundColor Yellow
-        Write-Host '  and CREATE TABLE IF NOT EXISTS skipped them. Re-run with -Fresh.' -ForegroundColor Yellow
+    if ($tableNames.Count -ge 15) {
+        Write-Host "  Verified: $($tableNames.Count) tables present in '$Database'." -ForegroundColor Green
     } else {
-        Write-Host "  Could not read the table count. Check the connection manually." -ForegroundColor Yellow
-        if ("$tableCountRaw" -like 'ERR:*') {
-            Write-Host "  server said: $tableCountRaw" -ForegroundColor Red
+        Write-Host "  Found $($tableNames.Count) table(s) in '$Database' (expected 15):" -ForegroundColor Yellow
+        Write-Host "    $($tableNames -join ', ')" -ForegroundColor DarkGray
+        if ($tableListErrors.Count -gt 0) {
+            Write-Host "  server said: $($tableListErrors -join ' | ')" -ForegroundColor Red
         }
     }
 

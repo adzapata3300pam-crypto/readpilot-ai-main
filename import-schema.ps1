@@ -109,9 +109,21 @@ try {
         # --batch --skip-column-names makes mysql emit only the value, so the
         # result can be read without having to guess which line is the data.
         $out = & $mysql @connectionArguments --batch --skip-column-names -e $Sql 2>&1
-        $last = ''
-        foreach ($line in $out) { $last = "$line".Trim() }
-        return $last
+
+        $value = ''
+        $errors = @()
+        foreach ($line in $out) {
+            $text = "$line".Trim()
+            if ([string]::IsNullOrWhiteSpace($text)) { continue }
+            if ($text -match '^(ERROR|Warning)') { $errors += $text; continue }
+            $value = $text
+        }
+
+        if ($errors.Count -gt 0 -and $value -eq '') {
+            return 'ERR: ' + ($errors -join ' | ')
+        }
+
+        return $value
     }
 
     $serverVersion = Invoke-Scalar 'SELECT VERSION();'
@@ -184,7 +196,11 @@ Write-Host 'Importing...' -ForegroundColor Yellow
             }
 
             Write-Host "  repairing: $($entry.table).$($entry.column)" -ForegroundColor Yellow
-            $alterOut = & $mysql @connectionArguments -e ("ALTER TABLE ``$($entry.table)`` ADD COLUMN ``$($entry.column)`` $($entry.definition);") 2>&1
+            $alterOut = # The connection selects no default schema, because the shared option file
+            # carries credentials only - putting "database=" there would make
+            # the connection fail outright on a first import, before the schema
+            # exists. Qualify the table instead.
+            & $mysql @connectionArguments -e ("ALTER TABLE ``$Database``.``$($entry.table)`` ADD COLUMN ``$($entry.column)`` $($entry.definition);") 2>&1
 
             if ($LASTEXITCODE -eq 0) {
                 $repaired += "$($entry.table).$($entry.column)"
@@ -277,6 +293,9 @@ if ($exitCode -eq 0) {
         Write-Host '  and CREATE TABLE IF NOT EXISTS skipped them. Re-run with -Fresh.' -ForegroundColor Yellow
     } else {
         Write-Host "  Could not read the table count. Check the connection manually." -ForegroundColor Yellow
+        if ("$tableCountRaw" -like 'ERR:*') {
+            Write-Host "  server said: $tableCountRaw" -ForegroundColor Red
+        }
     }
 
     Write-Host ''

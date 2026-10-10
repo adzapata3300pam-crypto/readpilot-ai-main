@@ -112,6 +112,77 @@ function readpilot_db_config(): array
 }
 
 /**
+ * Last-resort error handling.
+ *
+ * display_errors is Off in production, which is correct - but it means an
+ * uncaught fatal produces an empty response body, and the browser reports
+ * "Unexpected end of JSON input" with no clue why. These handlers turn a fatal
+ * into a message that names the file, line and reason, so the cause can be
+ * read off the response instead of guessed at.
+ */
+function readpilot_emit_failure(string $kind, string $message, string $file = '', int $line = 0): never
+{
+    $where = $file !== '' ? ' at ' . basename($file) . ':' . $line : '';
+    $text = $kind . $where . ' - ' . $message;
+    error_log('ReadPilot ' . $text);
+
+    if (PHP_SAPI === 'cli') {
+        fwrite(STDERR, $text . PHP_EOL);
+        exit(1);
+    }
+
+    if (readpilot_wants_json()) {
+        if (!headers_sent()) {
+            http_response_code(500);
+            header('Content-Type: application/json; charset=utf-8');
+        }
+        echo json_encode([
+            'ok' => false,
+            'error' => $kind . $where,
+            'detail' => $message,
+            'hint' => 'Full detail is in the Render Logs tab. If this mentions a missing column, re-run the schema import.',
+        ]);
+        exit;
+    }
+
+    if (!headers_sent()) {
+        http_response_code(500);
+        header('Content-Type: text/plain; charset=utf-8');
+    }
+    echo $text . PHP_EOL;
+    exit;
+}
+
+set_exception_handler(static function (Throwable $throwable): void {
+    readpilot_emit_failure(
+        'Unhandled ' . get_class($throwable),
+        $throwable->getMessage(),
+        $throwable->getFile(),
+        $throwable->getLine()
+    );
+});
+
+register_shutdown_function(static function (): void {
+    $last = error_get_last();
+
+    // Only fatal classes. Warnings and notices are logged and execution
+    // continues, so they must not produce a response.
+    if ($last === null || !in_array($last['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR, E_USER_ERROR], true)) {
+        return;
+    }
+
+    // If output already started, appending would corrupt the payload further;
+    // log only.
+    if (headers_sent()) {
+        error_log('ReadPilot fatal after output started: ' . $last['message']);
+
+        return;
+    }
+
+    readpilot_emit_failure('Fatal error', $last['message'], $last['file'], $last['line']);
+});
+
+/**
  * Renders a readable failure page when the database cannot be reached.
  *
  * Without this a misconfigured environment produces an uncaught PDOException

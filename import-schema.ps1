@@ -168,12 +168,30 @@ switch ($code) {
 
 if ($exitCode -eq 0) {
     Write-Host 'Import finished.' -ForegroundColor Green
+
+    # --- Verify rather than assume ------------------------------------------
+    $previousVerify = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    $verify = & $mysql @arguments -e "SELECT COUNT(*) AS t FROM information_schema.tables WHERE table_schema = '$Database';" 2>&1
+    $ErrorActionPreference = $previousVerify
+
+    $tableCount = -1
+    foreach ($line in $verify) { if ("$line" -match '^\s*(\d+)\s*$') { $tableCount = [int]$Matches[1] } }
+
+    Write-Host ''
+    if ($tableCount -ge 15) {
+        Write-Host "  Verified: $tableCount tables present in '$Database'." -ForegroundColor Green
+    } else {
+        Write-Host "  WARNING: found $tableCount tables in '$Database', expected 15." -ForegroundColor Yellow
+    }
+
     Write-Host ''
     Write-Host '  Next:' -ForegroundColor Cyan
     Write-Host '   1. Set DB_HOST / DB_PORT / DB_NAME / DB_USER / DB_PASS / DB_SSLMODE in Render'
-    Write-Host '   2. Sign in as admin@readpilot.local / ReadPilot2026! (delete the demo'
+    Write-Host '   2. Set DB_SSL_CA=/var/www/html/certs/ca.pem so the connection is encrypted'
+    Write-Host '   3. Sign in as admin@readpilot.local / ReadPilot2026! (delete the demo'
     Write-Host '      accounts afterwards)'
-    Write-Host '   3. Open /setup.php to confirm all 15 tables imported'
+    Write-Host '   4. Open /setup.php to confirm all 15 tables imported'
 }
 
 exit $exitCode

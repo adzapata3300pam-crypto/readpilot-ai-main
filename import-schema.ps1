@@ -79,10 +79,11 @@ $optionFile = Join-Path ([System.IO.Path]::GetTempPath()) ('readpilot-import-' +
 # out of the option-file format.
 $escapedPassword = '"' + ($plain -replace '\\', '\\\\' -replace '"', '\"' -replace "`r`n", '\n' -replace "`n", '\n' -replace "`r", '\r') + '"'
 
-$arguments = @(
-    "--defaults-extra-file=$optionFile",
-    '-e', "source $forwardSlashed"
-)
+# Credentials only. The SQL to run is supplied per call, because mysql accepts
+# a single -e: folding the import into $arguments meant every later -e (the
+# version probe, the existence checks, the ALTERs) was silently discarded, so
+# nothing ever reported a real result.
+$connectionArguments = @("--defaults-extra-file=$optionFile")
 
 $exitCode = 1
 try {
@@ -107,7 +108,7 @@ try {
         param([string]$Sql)
         # --batch --skip-column-names makes mysql emit only the value, so the
         # result can be read without having to guess which line is the data.
-        $out = & $mysql @arguments --batch --skip-column-names -e $Sql 2>&1
+        $out = & $mysql @connectionArguments --batch --skip-column-names -e $Sql 2>&1
         $last = ''
         foreach ($line in $out) { $last = "$line".Trim() }
         return $last
@@ -126,7 +127,7 @@ try {
     if ($Fresh) {
         Write-Host ''
         Write-Host '  -Fresh : dropping the database first' -ForegroundColor Yellow
-        $dropOut = & $mysql @arguments -e "DROP DATABASE IF EXISTS ``$Database``;" 2>&1
+        $dropOut = & $mysql @connectionArguments -e "DROP DATABASE IF EXISTS ``$Database``;" 2>&1
         if ($LASTEXITCODE -ne 0) {
             $dropText = ($dropOut | ForEach-Object { "$_" }) -join ' '
             if ($dropText -match 'ERROR\s+(\d{4})') {
@@ -143,7 +144,7 @@ Write-Host 'Importing...' -ForegroundColor Yellow
     # and the exit code is never inspected.
     $previousPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    $output = & $mysql @arguments 2>&1
+    $output = & $mysql @connectionArguments -e "source $forwardSlashed" 2>&1
     $exitCode = $LASTEXITCODE
     $ErrorActionPreference = $previousPreference
 
@@ -174,14 +175,22 @@ Write-Host 'Importing...' -ForegroundColor Yellow
 
             if ($has -eq '1') { continue }
 
+            # A non-numeric answer means the existence probe itself failed, so
+            # the column's state is unknown. Altering on that assumption is how
+            # a healthy schema gets reported as broken.
+            if ($has -notmatch '^\d+$') {
+                Write-Host "  UNKNOWN: could not probe $($entry.table).$($entry.column) ($has)" -ForegroundColor Red
+                continue
+            }
+
             Write-Host "  repairing: $($entry.table).$($entry.column)" -ForegroundColor Yellow
-            & $mysql @arguments -e ("ALTER TABLE ``$($entry.table)`` ADD COLUMN ``$($entry.column)`` $($entry.definition);") 2>&1 |
-                Where-Object { "$_" -notmatch 'Warning.*command line interface' } | Out-Null
+            $alterOut = & $mysql @connectionArguments -e ("ALTER TABLE ``$($entry.table)`` ADD COLUMN ``$($entry.column)`` $($entry.definition);") 2>&1
 
             if ($LASTEXITCODE -eq 0) {
                 $repaired += "$($entry.table).$($entry.column)"
             } else {
-                Write-Host "  FAILED to add $($entry.table).$($entry.column)" -ForegroundColor Red
+                $alterText = ($alterOut | ForEach-Object { "$_" } | Where-Object { "$_" -notmatch 'Warning.*command line interface' }) -join ' '
+                Write-Host "  FAILED to add $($entry.table).$($entry.column): $alterText" -ForegroundColor Red
             }
         }
 
